@@ -14,6 +14,7 @@ import 'package:yaml/yaml.dart';
 
 import 'watchos_cache.dart' show watchosToolRootDirectory;
 import 'watchos_host_mode.dart';
+import 'watchos_package_config.dart';
 import 'watchos_swift_package_manager.dart';
 
 /// Pubspec key, nested under `flutter.plugin.platforms.watchos`, by which an
@@ -147,9 +148,7 @@ List<_DependencyPluginYaml> _walkPluginDependencies(FlutterProject project) {
 
   // Build a name→path map from .dart_tool/package_config.json.
   final packagePaths = <String, String>{};
-  final File packageConfigFile = project.directory
-      .childDirectory('.dart_tool')
-      .childFile('package_config.json');
+  final File packageConfigFile = watchosPackageConfigFile(project.directory);
   if (packageConfigFile.existsSync()) {
     try {
       final packageConfig =
@@ -162,7 +161,7 @@ List<_DependencyPluginYaml> _walkPluginDependencies(FlutterProject project) {
         // rootUri may be relative to .dart_tool/ or a file:// URI.
         if (rootUri.startsWith('../')) {
           rootUri = globals.fs.path.normalize(
-            globals.fs.path.join(project.directory.path, '.dart_tool', rootUri),
+            globals.fs.path.join(packageConfigFile.parent.path, rootUri),
           );
         } else if (rootUri.startsWith('file://')) {
           rootUri = Uri.parse(rootUri).toFilePath();
@@ -568,9 +567,7 @@ bool _warnedAboutOldFlutterWatchos = false;
 /// to a newer plugin, it would still name the old `flutter_watchos`. This is
 /// the test stock `pub get` makes before it skips itself.
 bool _packageConfigPending(FlutterProject project) {
-  final File config = project.directory
-      .childDirectory('.dart_tool')
-      .childFile('package_config.json');
+  final File config = watchosPackageConfigFile(project.directory);
   final File pubspec = project.pubspecFile;
   if (!config.existsSync() || !pubspec.existsSync()) {
     return true;

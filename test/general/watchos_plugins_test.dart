@@ -559,6 +559,93 @@ flutter:
     );
   });
 
+  group('discovery in a pub workspace member', () {
+    String watchPluginPubspec(String name) => '''
+name: $name
+flutter:
+  plugin:
+    platforms:
+      watchos:
+        ffiPlugin: true
+        ffiSymbols:
+          - ${name}_init
+''';
+
+    Directory workspaceMember({required List<Map<String, String>> rootPackages}) {
+      fileSystem.file('/ws/pubspec.yaml')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('name: ws\nworkspace:\n  - apps/watch\n');
+      final Directory projectDir = fileSystem.directory('/ws/apps/watch')
+        ..createSync(recursive: true);
+      projectDir.childDirectory('watchos').childDirectory('Runner').createSync(recursive: true);
+      projectDir.childFile('pubspec.yaml').writeAsStringSync(
+        'name: watch\nresolution: workspace\n',
+      );
+      projectDir.childDirectory('.dart_tool').childDirectory('pub').childFile('workspace_ref.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('{\n  "workspaceRoot": "../../../.."\n}\n');
+      fileSystem.file('/ws/.dart_tool/package_config.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(json.encode(<String, Object?>{'packages': rootPackages}));
+      projectDir.childFile('.flutter-plugins-dependencies').writeAsStringSync(
+        json.encode(<String, dynamic>{
+          'plugins': <String, dynamic>{'watchos': <dynamic>[]},
+          'dependencyGraph': <dynamic>[],
+        }),
+      );
+      return projectDir;
+    }
+
+    List<Object?> discoveredWatchosPluginNames(Directory projectDir) {
+      final decoded = json.decode(
+        projectDir.childFile('.flutter-plugins-dependencies').readAsStringSync(),
+      ) as Map<String, dynamic>;
+      final plugins = (decoded['plugins'] as Map<String, dynamic>)['watchos']! as List<dynamic>;
+      return plugins.map((dynamic p) => (p as Map<String, dynamic>)['name']).toList();
+    }
+
+    testUsingContext(
+      "finds plugins through the workspace root's package config",
+      () async {
+        fileSystem.file('/pubcache/hosted_watch/pubspec.yaml')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(watchPluginPubspec('hosted_watch'));
+        fileSystem.directory('/pubcache/hosted_watch/watchos').createSync();
+        fileSystem.file('/ws/apps/watch/packages/local_watch/pubspec.yaml')
+          ..createSync(recursive: true)
+          ..writeAsStringSync(watchPluginPubspec('local_watch'));
+        fileSystem.directory('/ws/apps/watch/packages/local_watch/watchos').createSync();
+
+        final Directory projectDir = workspaceMember(
+          rootPackages: <Map<String, String>>[
+            <String, String>{'name': 'hosted_watch', 'rootUri': 'file:///pubcache/hosted_watch'},
+            <String, String>{'name': 'local_watch', 'rootUri': '../apps/watch/packages/local_watch'},
+            <String, String>{'name': 'watch', 'rootUri': '../apps/watch'},
+            <String, String>{'name': 'ws', 'rootUri': '../'},
+          ],
+        );
+
+        await ensureReadyForWatchosTooling(FlutterProject.fromDirectory(projectDir));
+
+        expect(
+          discoveredWatchosPluginNames(projectDir),
+          containsAll(<String>['hosted_watch', 'local_watch']),
+        );
+        expect(
+          projectDir.childFile('.flutter-plugins').readAsLinesSync(),
+          containsAll(<String>[
+            'hosted_watch=/pubcache/hosted_watch',
+            'local_watch=/ws/apps/watch/packages/local_watch',
+          ]),
+        );
+      },
+      overrides: <Type, Generator>{
+        FileSystem: () => fileSystem,
+        ProcessManager: () => processManager,
+      },
+    );
+  });
+
   group('native crown runtime', () {
     testWithoutContext('the registrant installs it before any plugin', () {
       final String source = watchosDartPluginRegistrantSource(
