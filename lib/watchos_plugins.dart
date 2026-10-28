@@ -6,6 +6,7 @@ import 'dart:convert';
 
 import 'package:flutter_tools/src/base/file_system.dart';
 import 'package:flutter_tools/src/globals.dart' as globals;
+import 'package:flutter_tools/src/package_graph.dart' show PackageGraph;
 import 'package:flutter_tools/src/platform_plugins.dart';
 import 'package:flutter_tools/src/project.dart';
 import 'package:meta/meta.dart' show visibleForTesting;
@@ -174,6 +175,15 @@ List<_DependencyPluginYaml> _walkPluginDependencies(FlutterProject project) {
       // Unexpected JSON shape; fall through with empty packagePaths.
     }
   }
+  if (pubWorkspaceRootOf(project.directory) != null) {
+    final Set<String>? memberPackages = _packagesReachableFromWorkspaceMember(
+      project,
+      packageConfigFile.parent.childFile('package_graph.json'),
+    );
+    if (memberPackages != null) {
+      packagePaths.removeWhere((String name, String _) => !memberPackages.contains(name));
+    }
+  }
 
   // Which packages to inspect. `dependencyGraph` is written by stock
   // `flutter pub get`, which emits one only once it recognises at least one
@@ -237,6 +247,34 @@ List<_DependencyPluginYaml> _walkPluginDependencies(FlutterProject project) {
   }
 
   return out;
+}
+
+Set<String>? _packagesReachableFromWorkspaceMember(FlutterProject project, File packageGraphFile) {
+  final PackageGraph graph;
+  try {
+    graph = PackageGraph.fromJson(
+      packageGraphFile,
+      json.decode(packageGraphFile.readAsStringSync()),
+    );
+  } on FileSystemException {
+    return null;
+  } on FormatException {
+    return null;
+  }
+  final String memberName = project.manifest.appName;
+  final List<String>? memberDependencies = graph.dependencies[memberName];
+  if (memberDependencies == null) {
+    return null;
+  }
+  final reachable = <String>{memberName};
+  final toVisit = <String>[...memberDependencies, ...?graph.devDependencies[memberName]];
+  while (toVisit.isNotEmpty) {
+    final String name = toVisit.removeLast();
+    if (reachable.add(name)) {
+      toVisit.addAll(graph.dependencies[name] ?? const <String>[]);
+    }
+  }
+  return reachable;
 }
 
 /// Discovers plugins in [project] that declare a

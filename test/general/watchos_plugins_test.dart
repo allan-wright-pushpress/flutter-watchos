@@ -571,7 +571,10 @@ flutter:
           - ${name}_init
 ''';
 
-    Directory workspaceMember({required List<Map<String, String>> rootPackages}) {
+    Directory workspaceMember({
+      required List<Map<String, String>> rootPackages,
+      Map<String, Object?>? packageGraph,
+    }) {
       fileSystem.file('/ws/pubspec.yaml')
         ..createSync(recursive: true)
         ..writeAsStringSync('name: ws\nworkspace:\n  - apps/watch\n');
@@ -587,6 +590,11 @@ flutter:
       fileSystem.file('/ws/.dart_tool/package_config.json')
         ..createSync(recursive: true)
         ..writeAsStringSync(json.encode(<String, Object?>{'packages': rootPackages}));
+      if (packageGraph != null) {
+        fileSystem.file('/ws/.dart_tool/package_graph.json').writeAsStringSync(
+          json.encode(packageGraph),
+        );
+      }
       projectDir.childFile('.flutter-plugins-dependencies').writeAsStringSync(
         json.encode(<String, dynamic>{
           'plugins': <String, dynamic>{'watchos': <dynamic>[]},
@@ -638,6 +646,63 @@ flutter:
             'local_watch=/ws/apps/watch/packages/local_watch',
           ]),
         );
+      },
+      overrides: <Type, Generator>{
+        FileSystem: () => fileSystem,
+        ProcessManager: () => processManager,
+      },
+    );
+
+    testUsingContext(
+      'leaves out a plugin only another workspace member depends on',
+      () async {
+        const memberPlugins = <String>['mine_watch', 'mine_dev_watch', 'mine_transitive_watch'];
+        for (final name in <String>[...memberPlugins, 'sibling_watch']) {
+          fileSystem.file('/pubcache/$name/pubspec.yaml')
+            ..createSync(recursive: true)
+            ..writeAsStringSync(watchPluginPubspec(name));
+          fileSystem.directory('/pubcache/$name/watchos').createSync();
+        }
+        Map<String, Object?> node(
+          String name, {
+          List<String> dependencies = const <String>[],
+          List<String> devDependencies = const <String>[],
+        }) => <String, Object?>{
+          'name': name,
+          'dependencies': dependencies,
+          'devDependencies': devDependencies,
+        };
+
+        final Directory projectDir = workspaceMember(
+          rootPackages: <Map<String, String>>[
+            for (final name in <String>[...memberPlugins, 'sibling_watch'])
+              <String, String>{'name': name, 'rootUri': 'file:///pubcache/$name'},
+            <String, String>{'name': 'watch', 'rootUri': '../apps/watch'},
+            <String, String>{'name': 'phone', 'rootUri': '../apps/phone'},
+          ],
+          packageGraph: <String, Object?>{
+            'configVersion': 1,
+            'roots': <String>['phone', 'watch'],
+            'packages': <Map<String, Object?>>[
+              node(
+                'watch',
+                dependencies: <String>['mine_watch'],
+                devDependencies: <String>['mine_dev_watch'],
+              ),
+              node('phone', dependencies: <String>['sibling_watch']),
+              node('mine_watch', dependencies: <String>['mine_transitive_watch']),
+              node('mine_dev_watch'),
+              node('mine_transitive_watch'),
+              node('sibling_watch'),
+            ],
+          },
+        );
+
+        await ensureReadyForWatchosTooling(FlutterProject.fromDirectory(projectDir));
+
+        final List<Object?> names = discoveredWatchosPluginNames(projectDir);
+        expect(names, containsAll(memberPlugins));
+        expect(names, isNot(contains('sibling_watch')));
       },
       overrides: <Type, Generator>{
         FileSystem: () => fileSystem,
